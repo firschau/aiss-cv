@@ -1,22 +1,35 @@
 from darknet import *
 import cv2
-import jetson.utils
+import numpy as np
 import random 
 import time
+
 
 class Inference:
 
     def __init__(self):
-        self.cfg_path = '/home/nvidia/Projects/darknet/cfg/custom-yolov4-tiny.cfg'
-        self.coco_data_path = '/home/nvidia/Projects/darknet/cfg/coco.data'
-        self.weights_path = '/home/nvidia/Projects/darknet/yolov4-tiny.weights'
-        self.thresh = 0.5
+        # Initialize Traffic Sign Yolo
+        self.sign_cfg_path = '/home/nvidia/Projects/aiss-cv/darknet/cfg/yolov4-tiny_training.cfg'
+        self.sign_classes_data_path = '/home/nvidia/Projects/aiss-cv/darknet/cfg/classes.data'
+        self.sign_weights_path = '/home/nvidia/Projects/aiss-cv/darknet/yolov4-tiny_training_last.weights'
+        self.sign_thresh = 0.5
+        self.sign_network, self.sign_class_names, self.sign_class_colors = load_network(self.sign_cfg_path, self.sign_classes_data_path, self.sign_weights_path)
+        self.sign_darknet_width =network_width(self.sign_network)
+        self.sign_darknet_height =network_height(self.sign_network)
+
+        # Initialize Person Yolo
+        self.pers_cfg_path = '/home/nvidia/Projects/darknet/cfg/custom-yolov4-tiny.cfg'
+        self.pers_coco_data_path = '/home/nvidia/Projects/darknet/cfg/coco.data'
+        self.pers_weights_path = '/home/nvidia/Projects/darknet/yolov4-tiny.weights'
+        self.pers_network, self.pers_class_names, self.pers_class_colors = load_network(self.pers_cfg_path, self.pers_coco_data_path, self.pers_weights_path)
+        self.pers_darknet_width =network_width(self.pers_network)
+        self.pers_darknet_height =network_height(self.pers_network)
+        self.pers_thresh = 0.4
+
+
         self.cap = cv2.VideoCapture(self.gstreamer_pipeline(
-                            capture_width=416, capture_height=416,
-                            flip_method=0),cv2.CAP_GSTREAMER)
-        self.network, self.class_names, self.class_colors = load_network(self.cfg_path, self.coco_data_path, self.weights_path)
-        self.darknet_width =network_width(self.network)
-        self.darknet_height =network_height(self.network)
+                    capture_width=416, capture_height=416,
+                    flip_method=0),cv2.CAP_GSTREAMER)
 
 
     def gstreamer_pipeline(self,
@@ -119,8 +132,8 @@ class Inference:
         YOLO format use relative coordinates for annotation
         """
         x, y, w, h = bbox
-        _height = self.darknet_height
-        _width = self.darknet_width
+        _height = self.sign_darknet_height
+        _width = self.sign_darknet_width
         return x/_width, y/_height, w/_width, h/_height
 
 
@@ -159,18 +172,18 @@ class Inference:
             orig_bottom = image_h - 1
 
         bbox_cropping = (orig_left, orig_top, orig_right, orig_bottom)
-        print(bbox_cropping)
+        
         return bbox_cropping
     
 
     def video_capture(self, frame):
 
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_resized = cv2.resize(frame_rgb, (self.darknet_width, self.darknet_height),
+        frame_resized = cv2.resize(frame_rgb, (self.sign_darknet_width, self.sign_darknet_height),
                                     interpolation=cv2.INTER_LINEAR)
         
         img_for_detect = make_image(
-            self.darknet_width, self.darknet_height, 3)
+            self.sign_darknet_width, self.sign_darknet_height, 3)
         copy_image_from_bytes(
             img_for_detect, frame_resized.tobytes())
         return img_for_detect
@@ -193,21 +206,43 @@ class Inference:
             if frame is None:
                 print("Didnt catch a frame")
 
-        darknet_image = self.video_capture(frame)
         prev_time = time.time()
+        darknet_image = self.video_capture(frame)
         detections = detect_image(
-        self.network, self.class_names, darknet_image, thresh=self.thresh)
-        fps = int(1/(time.time() - prev_time))
-        print("FPS: {}".format(fps))
-        print_detections(detections, "store_true")
-        free_image(darknet_image)
+        self.sign_network, self.sign_class_names, darknet_image, thresh=self.sign_thresh)
+
+        #print_detections(detections)
+        
         
 
         detect_list = []
         for label, confidence, bbox in detections:
-            print(bbox)
+            
             bbox_adjusted = self.convert2original(frame, bbox)
-            detect_list.append([str(label),self.conv_crop(frame, bbox_adjusted),bbox[0]])
+            detect_list.append([str(label),self.conv_crop(frame, bbox_adjusted),bbox[0]/frame.shape[1]]) 
+
+        #Send frame through Person Yolo
+        detections = detect_image(
+        self.pers_network, self.pers_class_names, darknet_image, thresh=self.pers_thresh)
+
+        for label, confidence, bbox in detections:
+            if str(label) == "person":
+                bbox_adjusted = self.convert2original(frame, bbox)
+                detect_list.append([str(label),[bbox[2],bbox[3]],bbox[0]/frame.shape[1]])
+                print(label) 
+
+        fps = int(1/(time.time() - prev_time))
+        print("With 2xYolo + Cropping FPS: {}".format(fps))
+        free_image(darknet_image)
+        detect_list = np.asarray(detect_list,dtype=object)
+        if detect_list.size >1:
+            detect_list.dump("output.pkl")
+
+
+
+
+        
+ 
 
         return detect_list
 	

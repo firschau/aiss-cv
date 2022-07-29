@@ -1,16 +1,21 @@
 from inference import Inference
 import cv2
+import time
+
 
 # This is just for test and show purposes
 
 inf = Inference()
-i=0
-while True:
-	i+=1
-	classes, cropped_imgs, x_centers = inf.inference()
-	if i%20 ==0:
-		for crop_img in cropped_imgs:
 
-			cv2.imshow("cropped img", crop_img)
-			cv2.waitKey(0)
+while True:
+	
+	
+	detect_list = inf.inference()
+
+	
+	for pred, crop_img, x_center in detect_list:
+		print(x_center)
+		print(pred)
+
+
 
